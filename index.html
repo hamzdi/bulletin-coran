@@ -1454,7 +1454,9 @@ td[contenteditable]:focus { background: var(--focus-bg); }
       v: 1,
       config: {
         theme: state.theme, periode: state.periode, annee: state.annee,
-        logo: state.logo, logoGallery: state.logoGallery,
+        // logoGallery is deliberately excluded: the recipient only needs the
+        // applied logo, not every logo in the sender's picker.
+        logo: state.logo,
         sigProf: state.sigProf, sigDir: state.sigDir
       },
       bulletins: [...main.querySelectorAll('.bulletin')].map(serializeBulletin)
