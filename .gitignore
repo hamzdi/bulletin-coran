@@ -11,3 +11,6 @@ bulletin_coran_generique.html
 .vscode/
 .idea/
 *.swp
+
+# Configuration locale Claude Code
+.claude/
