@@ -582,7 +582,7 @@ td[contenteditable]:focus { background: var(--focus-bg); }
 }
 
 /* FOOTER */
-.footer-block { margin-top: auto; padding-top: 18mm; }
+.footer-block { margin-top: auto; padding-top: 8mm; }
 .date-line {
   display: flex;
   gap: 18px;
@@ -606,7 +606,9 @@ td[contenteditable]:focus { background: var(--focus-bg); }
 .signatures {
   display: flex;
   gap: 6mm;
-  margin-top: 14mm;
+  /* Generous gap above the signatures so the auto-stamped signature image
+     (18mm tall) has room without overlapping the "Fait à / Le" lines. */
+  margin-top: 24mm;
   padding: 0 4mm;
 }
 .signature {
@@ -634,11 +636,62 @@ td[contenteditable]:focus { background: var(--focus-bg); }
 }
 .signature-stamp.visible { display: inline-block; }
 
+/* ================= SHARE DIALOG ================= */
+.share-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 20px;
+}
+.share-overlay[hidden] { display: none; }
+.share-dialog {
+  background: white;
+  border-radius: 8px;
+  padding: 22px 24px;
+  max-width: 520px;
+  width: 100%;
+  box-shadow: 0 8px 40px rgba(0,0,0,.3);
+}
+.share-dialog h2 { font-size: 16px; color: var(--c-deep); margin-bottom: 8px; }
+.share-desc { font-size: 13px; color: var(--muted); line-height: 1.45; margin-bottom: 12px; }
+.share-dialog textarea {
+  width: 100%;
+  font-family: monospace;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  resize: vertical;
+  color: var(--text);
+  outline: none;
+}
+.share-dialog textarea:focus { border-color: var(--c); }
+.share-warn { font-size: 12px; color: #b0532a; margin-top: 8px; }
+.share-warn[hidden] { display: none; }
+.share-actions { display: flex; gap: 8px; margin-top: 14px; justify-content: flex-end; }
+.share-actions button {
+  padding: 8px 16px;
+  font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  border: none;
+}
+.share-actions .primary { background: var(--c); color: white; }
+.share-actions .primary:hover { background: var(--c-deep); }
+.share-actions .secondary { background: #ececef; color: var(--text); }
+.share-actions .secondary:hover { background: #dfdfe3; }
+
 /* ================= PRINT ================= */
 @page { size: A4; margin: 0; }
 @media print {
   body { background: white; }
-  .toolbar, .config-panel, .bulletin-actions { display: none !important; }
+  .toolbar, .config-panel, .bulletin-actions, .share-overlay { display: none !important; }
   main { padding: 0; gap: 0; }
   .bulletin {
     box-shadow: none;
@@ -677,6 +730,7 @@ td[contenteditable]:focus { background: var(--focus-bg); }
 <div class="toolbar" role="toolbar">
   <button id="add-page" class="primary" type="button">+ Ajouter un bulletin</button>
   <button id="print-btn" class="secondary" type="button">🖨 Imprimer</button>
+  <button id="share-btn" class="secondary" type="button">🔗 Partager</button>
   <button id="config-toggle" class="config-toggle" type="button">⚙ Configuration</button>
   <span class="hint">Saisie inline. Survolez un bulletin pour dupliquer ou supprimer.</span>
 </div>
@@ -860,6 +914,23 @@ td[contenteditable]:focus { background: var(--focus-bg); }
     </div>
   </article>
 </template>
+
+<!-- ================= SHARE DIALOG ================= -->
+<div class="share-overlay" id="share-overlay" hidden>
+  <div class="share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-title">
+    <h2 id="share-title">Partager les bulletins</h2>
+    <p class="share-desc">Ce lien contient tout ce qui a été saisi (bulletins, logo, signatures).
+      La personne qui l'ouvre retrouve la saisie à l'identique et peut ajouter sa
+      signature avant d'imprimer.</p>
+    <textarea id="share-link" readonly rows="4" aria-label="Lien de partage"></textarea>
+    <p class="share-warn" id="share-warn" hidden>⚠ Ce lien est très long : certaines
+      messageries risquent de le tronquer. Privilégiez l'e-mail ou un copier-coller direct.</p>
+    <div class="share-actions">
+      <button type="button" id="share-copy" class="primary">Copier le lien</button>
+      <button type="button" id="share-close" class="secondary">Fermer</button>
+    </div>
+  </div>
+</div>
 
 <main id="bulletins"></main>
 
@@ -1082,6 +1153,8 @@ td[contenteditable]:focus { background: var(--focus-bg); }
 
   // ============== UI: LOGO GALLERY ==============
   const logoGalleryEl = document.getElementById('logo-gallery');
+  // Assigned during boot; referenced by applyLogo / removeGalleryLogo.
+  let logoUploadAPI;
 
   // Add a freshly uploaded logo to the gallery, or undo the addition on rollback.
   // Called as onUpload(dataURI) on success, onUpload(null, dataURI) on rollback.
@@ -1289,39 +1362,221 @@ td[contenteditable]:focus { background: var(--focus-bg); }
     }
   });
 
+  // ============== SHARE: SERIALISATION ==============
+  // Read a contenteditable element's text, preserving line breaks.
+  function getEditableText(el) {
+    return el ? el.innerText : '';
+  }
+  // Write plain text into a contenteditable element. Line breaks become <br>.
+  // Never inserts HTML, so a tampered share link cannot inject markup.
+  function setEditableText(el, str) {
+    if (!el) return;
+    el.textContent = '';
+    String(str == null ? '' : str).split('\n').forEach((line, i) => {
+      if (i > 0) el.appendChild(document.createElement('br'));
+      el.appendChild(document.createTextNode(line));
+    });
+  }
+
+  // Capture everything a user typed into one bulletin.
+  function serializeBulletin(b) {
+    const texts = sel => [...b.querySelectorAll(sel)].map(getEditableText);
+    return {
+      identity: texts('.identity .value'),
+      revision: texts('[data-table="revision"] tbody td'),
+      apprentissage: texts('[data-table="apprentissage"] tbody td'),
+      attendance: texts('.att-value'),
+      checks: [...b.querySelectorAll('.appreciation-checks input')].map(c => c.checked),
+      appreciation: getEditableText(b.querySelector('.appreciation')),
+      dates: texts('.date-line .value')
+    };
+  }
+
+  // Restore captured content into a freshly created bulletin node.
+  function applyBulletinData(b, d) {
+    if (!d) return;
+    const fill = (sel, arr) => {
+      const els = [...b.querySelectorAll(sel)];
+      els.forEach((el, i) => { if (arr && arr[i] != null) setEditableText(el, arr[i]); });
+    };
+    fill('.identity .value', d.identity);
+    fill('[data-table="revision"] tbody td', d.revision);
+    fill('[data-table="apprentissage"] tbody td', d.apprentissage);
+    fill('.att-value', d.attendance);
+    fill('.date-line .value', d.dates);
+    setEditableText(b.querySelector('.appreciation'), d.appreciation);
+    [...b.querySelectorAll('.appreciation-checks input')].forEach((c, i) => {
+      c.checked = !!(d.checks && d.checks[i]);
+    });
+  }
+
+  // ============== SHARE: ENCODING ==============
+  function bytesToB64Url(bytes) {
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  function b64UrlToBytes(b64) {
+    b64 = b64.replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+  // Encode the share payload as a compact, URL-safe string.
+  // Prefix 'c' = deflate-compressed, 'u' = uncompressed fallback.
+  async function encodePayload(obj) {
+    let bytes = new TextEncoder().encode(JSON.stringify(obj));
+    let prefix = 'u';
+    if (typeof CompressionStream !== 'undefined') {
+      try {
+        const stream = new Blob([bytes]).stream()
+          .pipeThrough(new CompressionStream('deflate'));
+        bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+        prefix = 'c';
+      } catch (e) { /* keep uncompressed bytes */ }
+    }
+    return prefix + bytesToB64Url(bytes);
+  }
+  async function decodePayload(str) {
+    const prefix = str.charAt(0);
+    let bytes = b64UrlToBytes(str.slice(1));
+    if (prefix === 'c') {
+      const stream = new Blob([bytes]).stream()
+        .pipeThrough(new DecompressionStream('deflate'));
+      bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+    return JSON.parse(new TextDecoder().decode(bytes));
+  }
+
+  async function buildShareLink() {
+    const payload = {
+      v: 1,
+      config: {
+        theme: state.theme, periode: state.periode, annee: state.annee,
+        logo: state.logo, logoGallery: state.logoGallery,
+        sigProf: state.sigProf, sigDir: state.sigDir
+      },
+      bulletins: [...main.querySelectorAll('.bulletin')].map(serializeBulletin)
+    };
+    const encoded = await encodePayload(payload);
+    return location.origin + location.pathname + '#s=' + encoded;
+  }
+
+  // ============== SHARE: DIALOG ==============
+  const shareOverlay = document.getElementById('share-overlay');
+  const shareLinkEl = document.getElementById('share-link');
+  const shareWarnEl = document.getElementById('share-warn');
+  const shareCopyBtn = document.getElementById('share-copy');
+
+  function closeShareDialog() { shareOverlay.hidden = true; }
+
+  async function openShareDialog() {
+    shareCopyBtn.textContent = 'Copier le lien';
+    shareWarnEl.hidden = true;
+    shareLinkEl.value = 'Génération du lien…';
+    shareOverlay.hidden = false;
+    let link;
+    try {
+      link = await buildShareLink();
+    } catch (e) {
+      shareLinkEl.value = 'Erreur : impossible de générer le lien de partage.';
+      return;
+    }
+    shareLinkEl.value = link;
+    // Long links may be truncated by some messaging apps.
+    shareWarnEl.hidden = link.length < 12000;
+    shareLinkEl.focus();
+    shareLinkEl.select();
+  }
+
+  document.getElementById('share-btn').addEventListener('click', openShareDialog);
+  document.getElementById('share-close').addEventListener('click', closeShareDialog);
+  shareOverlay.addEventListener('click', (e) => {
+    if (e.target === shareOverlay) closeShareDialog();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !shareOverlay.hidden) closeShareDialog();
+  });
+  shareCopyBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(shareLinkEl.value);
+    } catch (e) {
+      shareLinkEl.focus();
+      shareLinkEl.select();
+      try { document.execCommand('copy'); } catch (err) {}
+    }
+    shareCopyBtn.textContent = 'Lien copié ✓';
+    setTimeout(() => { shareCopyBtn.textContent = 'Copier le lien'; }, 2000);
+  });
+
   // ============== BOOT ==============
-  load();
-  renderSwatches();
-  applyTheme(state.theme);
-  // Sync UI controls with state
-  periodeSel.value = state.periode;
-  anneeInput.value = state.annee;
+  function getSharedPayloadString() {
+    const m = location.hash.match(/(?:^#|&)s=([^&]*)/);
+    return m ? m[1] : null;
+  }
 
-  // Set up uploads (must come AFTER load so renderZone shows persisted images)
-  const logoUploadAPI = setupUpload({
-    inputId: 'logo-input', zoneId: 'logo-zone', clearBtnId: 'logo-clear',
-    stateKey: 'logo', propagator: propagateLogo,
-    placeholder: '📷 Choisir un logo (PNG, JPG)', onUpload: onLogoUpload
-  });
-  setupUpload({
-    inputId: 'sig-prof-input', zoneId: 'sig-prof-zone', clearBtnId: 'sig-prof-clear',
-    stateKey: 'sigProf', propagator: propagateSigProf, placeholder: '✍ Signature manuscrite (image)'
-  });
-  setupUpload({
-    inputId: 'sig-dir-input', zoneId: 'sig-dir-zone', clearBtnId: 'sig-dir-clear',
-    stateKey: 'sigDir', propagator: propagateSigDir, placeholder: '✍ Signature manuscrite (image)'
-  });
+  async function boot() {
+    load();
 
-  // No default logo or direction signature on the public version:
-  // the Bee Learning logo is offered in the gallery, and signatures are
-  // imported by the user via the upload zones.
-  renderLogoGallery();
+    // A share link (#s=…) carries another user's config and bulletins,
+    // overriding whatever is in localStorage for this session.
+    let sharedBulletins = null;
+    const shared = getSharedPayloadString();
+    if (shared) {
+      try {
+        const payload = await decodePayload(shared);
+        if (payload && payload.v === 1 && payload.config) {
+          Object.assign(state, payload.config);
+          sharedBulletins = Array.isArray(payload.bulletins) ? payload.bulletins : [];
+        } else {
+          alert('Lien de partage non reconnu.');
+        }
+      } catch (e) {
+        alert('Lien de partage illisible ou corrompu.');
+      }
+    }
 
-  // Initial bulletin
-  addBulletin();
-  propagateLogo();
-  propagateSigProf();
-  propagateSigDir();
+    renderSwatches();
+    applyTheme(state.theme);
+    // Sync UI controls with state
+    periodeSel.value = state.periode;
+    anneeInput.value = state.annee;
+
+    // Set up uploads (must come AFTER load so renderZone shows persisted images)
+    logoUploadAPI = setupUpload({
+      inputId: 'logo-input', zoneId: 'logo-zone', clearBtnId: 'logo-clear',
+      stateKey: 'logo', propagator: propagateLogo,
+      placeholder: '📷 Choisir un logo (PNG, JPG)', onUpload: onLogoUpload
+    });
+    setupUpload({
+      inputId: 'sig-prof-input', zoneId: 'sig-prof-zone', clearBtnId: 'sig-prof-clear',
+      stateKey: 'sigProf', propagator: propagateSigProf, placeholder: '✍ Signature manuscrite (image)'
+    });
+    setupUpload({
+      inputId: 'sig-dir-input', zoneId: 'sig-dir-zone', clearBtnId: 'sig-dir-clear',
+      stateKey: 'sigDir', propagator: propagateSigDir, placeholder: '✍ Signature manuscrite (image)'
+    });
+
+    // No default logo or direction signature on the public version:
+    // the Bee Learning logo is offered in the gallery, and signatures are
+    // imported by the user via the upload zones.
+    renderLogoGallery();
+
+    // Bulletins: restored from a share link, or a single empty one.
+    if (sharedBulletins && sharedBulletins.length) {
+      sharedBulletins.forEach(d => applyBulletinData(addBulletin(), d));
+    } else {
+      addBulletin();
+    }
+    recomputeAll();
+
+    propagateLogo();
+    propagateSigProf();
+    propagateSigDir();
+  }
+
+  boot();
 
 })();
 </script>
