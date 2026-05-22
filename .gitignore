@@ -1,0 +1,13 @@
+# Version locale avec signature de la direction embarquée — ne jamais publier
+index.beelearning.html
+
+# Fichier source d'origine (conservé hors dépôt)
+bulletin_coran_generique.html
+
+# macOS
+.DS_Store
+
+# Éditeurs
+.vscode/
+.idea/
+*.swp
